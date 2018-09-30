@@ -11,9 +11,7 @@ import (
 )
 
 var (
-	ErrConnectionClosed            = errors.New("connection closed")
-	ErrByteHeaderNotFound          = errors.New("byte header not found")
-	ErrByteHeaderAlreadyRegistered = errors.New("byte header already registered")
+	ErrConnectionClosed = errors.New("connection closed")
 )
 
 type RWHandler func(io.Reader, io.Writer, net.Conn) error
@@ -21,33 +19,23 @@ type RWHandler func(io.Reader, io.Writer, net.Conn) error
 type Socket struct {
 	li net.Listener
 
-	handlers      map[byte]RWHandler
-	handlersMutex sync.Mutex
+	matcher *Matcher
 }
 
 func Bind(li net.Listener) *Socket {
 	s := &Socket{
-		li, make(map[byte]RWHandler), sync.Mutex{},
+		li, CreateEmptyMatcher(),
 	}
 
 	return s
 }
 
+func (s *Socket) Matcher() *Matcher {
+	return s.matcher
+}
+
 func (s *Socket) Register(bytes []byte, h RWHandler) error {
-	s.handlersMutex.Lock()
-	defer s.handlersMutex.Unlock()
-
-	for _, b := range bytes {
-		if s.handlers[b] != nil {
-			return ErrByteHeaderAlreadyRegistered
-		}
-	}
-
-	for _, b := range bytes {
-		s.handlers[b] = h
-	}
-
-	return nil
+	return s.matcher.RegisterBytes(bytes, h)
 }
 
 func (s *Socket) Accept(wg *sync.WaitGroup, lg *log.Logger, t time.Duration) error {
@@ -81,15 +69,7 @@ func (s *Socket) Accept(wg *sync.WaitGroup, lg *log.Logger, t time.Duration) err
 					return err
 				}
 
-				s.handlersMutex.Lock()
-				handler := s.handlers[header]
-				s.handlersMutex.Unlock()
-
-				if handler == nil {
-					return ErrByteHeaderNotFound
-				}
-
-				if err := handler(r, w, conn); err != nil {
+				if err := s.matcher.Invoke(header, r, w, conn); err != nil {
 					return err
 				}
 
